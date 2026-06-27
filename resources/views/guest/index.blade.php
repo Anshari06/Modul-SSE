@@ -96,19 +96,19 @@
             <div class="row mt-4">
                 <div class="col-md-4 mb-2">
                     <div class="d-flex align-items-center">
-                        <span class="badge bg-secondary queue-badge me-2">0</span>
+                        <span class="badge bg-secondary queue-badge me-2 stat-menunggu-num">0</span>
                         <small class="text-muted">Menunggu</small>
                     </div>
                 </div>
                 <div class="col-md-4 mb-2">
                     <div class="d-flex align-items-center">
-                        <span class="badge bg-warning queue-badge me-2">0</span>
+                        <span class="badge bg-warning queue-badge me-2 stat-diproses-num">0</span>
                         <small class="text-muted">Diproses</small>
                     </div>
                 </div>
                 <div class="col-md-4 mb-2">
                     <div class="d-flex align-items-center">
-                        <span class="badge bg-success queue-badge me-2">0</span>
+                        <span class="badge bg-success queue-badge me-2 stat-selesai-num">0</span>
                         <small class="text-muted">Selesai</small>
                     </div>
                 </div>
@@ -126,15 +126,32 @@
     function initSSE() {
         eventSource = new EventSource("{{ route('antrian.stream') }}");
 
-        eventSource.addEventListener('current_queue', function(e) {
+        // Event tunggal unified: dapat queues, current, stats
+        eventSource.onmessage = function(e) {
             const data = JSON.parse(e.data);
-            document.getElementById('currentNumber').textContent = data.nomor ?? '-';
-            document.getElementById('currentService').textContent = data.layanan ?? 'Memuat...';
-        });
 
-        eventSource.addEventListener('my_queue', function(e) {
-            const queues = JSON.parse(e.data);
+            // Update antrian sekarang (yang sedang dipanggil)
+            if (data.current) {
+                document.getElementById('currentNumber').textContent = data.current.nomor ?? '-';
+                const layananLabels = { umum: 'Layanan Umum', prioritas: 'Layanan Prioritas', bisnis: 'Layanan Bisnis' };
+                document.getElementById('currentService').textContent = data.current.nama
+                    ? `${data.current.nama} - ${layananLabels[data.current.layanan] || data.current.layanan}`
+                    : 'Tidak ada antrian aktif';
+            }
+
+            // Update statistik
+            if (data.stats) {
+                const el = document.querySelector('.stat-menunggu-num');
+                if (el) el.textContent = data.stats.waiting;
+                const el2 = document.querySelector('.stat-diproses-num');
+                if (el2) el2.textContent = data.stats.called;
+                const el3 = document.querySelector('.stat-selesai-num');
+                if (el3) el3.textContent = data.stats.done;
+            }
+
+            // Update tabel antrian saya (tampilkan semua status)
             const tbody = document.getElementById('myQueueTable');
+            const queues = data.queues || [];
 
             if (queues.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Belum ada data antrian</td></tr>';
@@ -142,12 +159,14 @@
             }
 
             tbody.innerHTML = queues.map(q => {
-                const statusClass = q.status === 'menunggu' ? 'bg-secondary' :
-                                    q.status === 'diproses' ? 'bg-warning text-dark' : 'bg-success';
-                const statusText = q.status === 'menunggu' ? 'Menunggu' :
-                                   q.status === 'diproses' ? 'Diproses' : 'Selesai';
-                const layananText = q.layanan === 'umum' ? 'Umum' :
-                                    q.layanan === 'prioritas' ? 'Prioritas' : 'Bisnis';
+                const statusMap = {
+                    'waiting': ['bg-secondary', 'Menunggu'],
+                    'called':  ['bg-warning text-dark', 'Dipanggil'],
+                    'missed':  ['bg-danger', 'Terlewat'],
+                    'done':    ['bg-success', 'Selesai'],
+                };
+                const [statusClass, statusText] = statusMap[q.status] || ['bg-secondary', 'Unknown'];
+                const layananText = { umum: 'Umum', prioritas: 'Prioritas', bisnis: 'Bisnis' }[q.layanan] || q.layanan;
                 const waktu = new Date(q.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
                 return `<tr>
@@ -158,7 +177,7 @@
                     <td>${waktu}</td>
                 </tr>`;
             }).join('');
-        });
+        };
 
         eventSource.onerror = function() {
             console.log('SSE Connection error, retrying...');
@@ -172,7 +191,7 @@
         const no_hp = document.getElementById('no_hp').value;
         const layanan = document.getElementById('layanan').value;
 
-        fetch("{{ route('antrian.ambil') }}", {
+        fetch("{{ route('antrian.store') }}", {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

@@ -161,19 +161,33 @@
     function initSSE() {
         eventSource = new EventSource("{{ route('antrian.stream') }}");
 
-        eventSource.addEventListener('queue_update', function(e) {
-            const queues = JSON.parse(e.data);
-            allQueues = queues;
-            renderQueueTable(queues);
-            updateStats(queues);
-        });
-
-        eventSource.addEventListener('now_serving', function(e) {
+        // Unified SSE event
+        eventSource.onmessage = function(e) {
             const data = JSON.parse(e.data);
-            document.getElementById('nowNumber').textContent = data.nomor ?? '-';
-            document.getElementById('nowService').textContent = data.layanan ? 'Layanan: ' + capitalize(data.layanan) : 'Tidak ada antrian aktif';
-            document.getElementById('btnPanggil').disabled = !data.nomor;
-        });
+            allQueues = data.queues || [];
+
+            renderQueueTable(allQueues);
+
+            if (data.stats) {
+                document.getElementById('statMenunggu').textContent = data.stats.waiting;
+                document.getElementById('statDiproses').textContent = data.stats.called;
+                document.getElementById('statSelesai').textContent = data.stats.done;
+                document.getElementById('statTotal').textContent = allQueues.length;
+            }
+
+            if (data.current) {
+                document.getElementById('nowNumber').textContent = data.current.nomor ?? '-';
+                const layananLabels = { umum: 'Layanan Umum', prioritas: 'Layanan Prioritas', bisnis: 'Layanan Bisnis' };
+                document.getElementById('nowService').textContent = data.current.nama
+                    ? `${data.current.nama} - ${layananLabels[data.current.layanan] || data.current.layanan}`
+                    : 'Tidak ada antrian aktif';
+                document.getElementById('btnPanggil').disabled = false;
+            } else {
+                document.getElementById('nowNumber').textContent = '-';
+                document.getElementById('nowService').textContent = 'Tidak ada antrian aktif';
+                document.getElementById('btnPanggil').disabled = allQueues.filter(q => q.status === 'waiting').length === 0;
+            }
+        };
 
         eventSource.onerror = function() {
             console.log('SSE Connection error, retrying...');
@@ -181,7 +195,7 @@
     }
 
     function capitalize(str) {
-        return str.charAt(0).toUpperCase() + str.slice(1);
+        return str ? str.charAt(0).toUpperCase() + str.slice(1) : '';
     }
 
     function renderQueueTable(queues) {
@@ -195,10 +209,13 @@
         }
 
         tbody.innerHTML = filtered.map(q => {
-            const statusClass = q.status === 'menunggu' ? 'bg-secondary' :
-                                q.status === 'diproses' ? 'bg-warning text-dark' : 'bg-success';
-            const statusText = q.status === 'menunggu' ? 'Menunggu' :
-                               q.status === 'diproses' ? 'Diproses' : 'Selesai';
+            const statusMap = {
+                'waiting': ['bg-secondary', 'Menunggu'],
+                'called':  ['bg-warning text-dark', 'Dipanggil'],
+                'missed':  ['bg-danger', 'Terlewat'],
+                'done':    ['bg-success', 'Selesai'],
+            };
+            const [statusClass, statusText] = statusMap[q.status] || ['bg-secondary', 'Unknown'];
             const layananClass = q.layanan === 'umum' ? 'bg-primary' :
                                  q.layanan === 'prioritas' ? 'bg-danger' : 'bg-info';
             const layananText = capitalize(q.layanan);
@@ -206,9 +223,12 @@
                 day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
             });
 
-            const btnPanggil = q.status === 'menunggu'
-                ? `<button class="btn btn-sm btn-success" onclick="panggil(${q.id})"><i class="bi bi-bell"></i> Panggil</button>`
-                : `<button class="btn btn-sm btn-secondary" disabled><i class="bi bi-check"></i> ${statusText}</button>`;
+            const btnPanggil = q.status === 'waiting'
+                ? `<button class="btn btn-sm btn-success" onclick="panggil(${q.id})"><i class="bi bi-bell"></i> Panggil</button>
+                   <button class="btn btn-sm btn-outline-danger" onclick="selesai(${q.id})"><i class="bi bi-check-lg"></i></button>`
+                : q.status === 'called'
+                ? `<button class="btn btn-sm btn-warning" onclick="selesai(${q.id})"><i class="bi bi-check-lg"></i> Selesai</button>`
+                : `<span class="badge ${statusClass}"><i class="bi bi-check"></i> ${statusText}</span>`;
 
             return `<tr>
                 <td class="text-center"><span class="badge bg-dark queue-badge">${q.nomor}</span></td>
@@ -222,15 +242,8 @@
         }).join('');
     }
 
-    function updateStats(queues) {
-        document.getElementById('statMenunggu').textContent = queues.filter(q => q.status === 'menunggu').length;
-        document.getElementById('statDiproses').textContent = queues.filter(q => q.status === 'diproses').length;
-        document.getElementById('statSelesai').textContent = queues.filter(q => q.status === 'selesai').length;
-        document.getElementById('statTotal').textContent = queues.length;
-    }
-
     function panggil(id) {
-        fetch("{{ route('antrian.panggil') }}", {
+        fetch("{{ route('antrian.call', '') }}/" + id, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -240,12 +253,23 @@
         })
         .then(res => res.json())
         .then(data => {
-            if (!data.success) alert('Gagal memanggil: ' + (data.message || '未知错误'));
+            if (!data.success) alert('Gagal memanggil: ' + (data.message || 'Terjadi kesalahan'));
+        });
+    }
+
+    function selesai(id) {
+        fetch("{{ route('antrian.done', '') }}/" + id, {
+            method: 'POST',
+            headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}' }
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (!data.success) alert('Gagal menyelesaikan: ' + (data.message || 'Terjadi kesalahan'));
         });
     }
 
     document.getElementById('btnPanggil').addEventListener('click', function() {
-        const waitingQueues = allQueues.filter(q => q.status === 'menunggu');
+        const waitingQueues = allQueues.filter(q => q.status === 'waiting');
         if (waitingQueues.length > 0) {
             panggil(waitingQueues[0].id);
         }
