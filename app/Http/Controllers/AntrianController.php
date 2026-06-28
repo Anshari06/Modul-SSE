@@ -109,7 +109,7 @@ class AntrianController extends Controller
 
         $antrian->update(['status' => 'done']);
 
-        // Update cache kalau ini antrian yang sedang dipanggil
+        // Clear cache kalau ini antrian yang sedang dipanggil
         $current = Cache::get('current_queue');
         if ($current && $current['id'] == $id) {
             Cache::forget('current_queue');
@@ -123,8 +123,14 @@ class AntrianController extends Controller
     // ============================================
     public function reset()
     {
+        // 1. Hapus semua antrian hari ini dari DB
         Antrian::today()->delete();
+
+        // 2. Clear cache current queue
         Cache::forget('current_queue');
+
+        // 3. Clear last_called_id tracking (lewat cache juga)
+        Cache::forget('last_called_id');
 
         return response()->json(['success' => true, 'message' => 'Semua antrian hari ini telah direset']);
     }
