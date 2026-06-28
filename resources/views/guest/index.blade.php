@@ -47,7 +47,6 @@
                             <select class="form-select" id="layanan" name="layanan" required>
                                 <option value="" selected disabled>-- Pilih Layanan --</option>
                                 <option value="umum">Layanan Umum</option>
-                                <option value="prioritas">Layanan Prioritas</option>
                                 <option value="bisnis">Layanan Bisnis</option>
                             </select>
                         </div>

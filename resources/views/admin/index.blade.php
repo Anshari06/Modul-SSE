@@ -34,6 +34,14 @@
                         <i class="bi bi-box-arrow-left me-2"></i>Kembali ke Beranda
                     </a>
                 </li>
+                <li class="nav-item mt-2">
+                    <form method="POST" action="{{ route('logout') }}" class="d-inline">
+                        @csrf
+                        <button type="submit" class="nav-link custom-nav text-white w-100 text-start bg-transparent border-0">
+                            <i class="bi bi-power me-2"></i>Logout
+                        </button>
+                    </form>
+                </li>
             </ul>
         </aside>
 
@@ -243,7 +251,7 @@
     }
 
     function panggil(id) {
-        fetch("{{ route('antrian.call', '') }}/" + id, {
+        fetch("{{ url('/call') }}/" + id, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -258,7 +266,7 @@
     }
 
     function selesai(id) {
-        fetch("{{ route('antrian.done', '') }}/" + id, {
+        fetch("{{ url('/done') }}/" + id, {
             method: 'POST',
             headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}' }
         })

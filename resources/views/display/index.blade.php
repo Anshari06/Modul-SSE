@@ -507,10 +507,15 @@
         try {
             const audio = new Audio('/audio/tingtong.mp3');
             audio.volume = 0.8;
-            audio.play().catch(() => {});
-        } catch(e) {
-            console.log('Audio play error:', e.message);
-        }
+            audio.play().then(() => {
+            // Hentikan audio setelah 2000 milidetik (2 detik)
+            setTimeout(() => {
+                audio.pause();
+                audio.currentTime = 0; // Reset ke detik ke-0 agar siap jika dipanggil lagi
+            }, 2000);
+        }).catch(() => {});
+    } catch(e) {
+        console.log('Audio play error:', e.message);
     }
 
     // =====================================================
