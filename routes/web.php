@@ -23,4 +23,5 @@ Route::get('/admin', [AntrianController::class, 'admin'])->name('admin.dashboard
 Route::post('/call/{id}', [AntrianController::class, 'call'])->name('antrian.call')->middleware('auth');
 Route::post('/recall/{id}', [AntrianController::class, 'recall'])->name('antrian.recall')->middleware('auth');
 Route::post('/done/{id}', [AntrianController::class, 'done'])->name('antrian.done')->middleware('auth');
+Route::post('/skip/{id}', [AntrianController::class, 'skip'])->name('antrian.skip')->middleware('auth');
 Route::post('/reset', [AntrianController::class, 'reset'])->name('antrian.reset')->middleware('auth');

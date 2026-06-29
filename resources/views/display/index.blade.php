@@ -560,7 +560,7 @@
         // STATE
         // =====================================================
         let eventSource;
-        let lastCalledId = null; // Cegah suara double
+        let lastCalledAt = null; // Gunakan timestamp untuk deteksi pemanggilan baru
         let isSpeaking = false;
         let lastQueueCount = 0; // Cegah flash saat data sama
 
@@ -678,13 +678,15 @@
                 calloutContent.style.display = 'none';
                 emptyContent.style.display = 'block';
                 numEl.classList.remove('active', 'pulse');
+                lastCalledAt = null;
                 return;
             }
 
             calloutContent.style.display = 'block';
             emptyContent.style.display = 'none';
 
-            const isNew = lastCalledId !== current.id;
+            // Deteksi pemanggilan baru berdasarkan timestamp called_at
+            const isNew = lastCalledAt !== current.called_at;
 
             // Update teks
             numEl.textContent = current.nomor;
@@ -696,9 +698,9 @@
             };
             svcEl.innerHTML = `<i class="bi ${svc.icon} me-2"></i>${svc.text}`;
 
-            // Trigger hanya kalau nomor BERUAS
+            // Trigger hanya kalau timestamp BERUBAH (termasuk recall)
             if (isNew) {
-                lastCalledId = current.id;
+                lastCalledAt = current.called_at;
 
                 // Flash screen
                 triggerFlash();

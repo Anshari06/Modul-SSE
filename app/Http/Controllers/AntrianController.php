@@ -136,38 +136,95 @@ class AntrianController extends Controller
     }
 
     // ============================================
-    // PANGGIL ULANG NOMOR ANTRIAN (yang sudah missed/diproses)
+    // PANGGIL ULANG NOMOR ANTRIAN (yang sedang aktif saja)
     // ============================================
     public function recall($id)
     {
-        // Tandai semua yang sedang 'called' jadi 'missed'
-        Antrian::where('status', 'called')->update(['status' => 'missed']);
-
         $antrian = Antrian::find($id);
 
         if (!$antrian) {
             return response()->json(['success' => false, 'message' => 'Antrian tidak ditemukan']);
         }
 
-        // Boleh panggil ulang yang missed atau done
-        if (!in_array($antrian->status, ['waiting', 'missed', 'done'])) {
-            return response()->json(['success' => false, 'message' => 'Tidak bisa memanggil ulang antrian yang sedang aktif']);
+        // Ambil antrian yang sedang aktif dari cache
+        $currentQueue = Cache::get('current_queue');
+
+        // HANYA boleh panggil ulang jika ini antrian yang sedang aktif
+        // Jika sudah dipindahkan ke antrian lain, tidak boleh panggil ulang
+        if (!$currentQueue || $currentQueue['id'] != $id) {
+            $statusLabels = [
+                'waiting' => 'menunggu',
+                'missed' => 'sudah terlewat',
+                'done' => 'sudah selesai',
+                'called' => 'sedang diproses',
+            ];
+            $statusText = $statusLabels[$antrian->status] ?? $antrian->status;
+            return response()->json([
+                'success' => false,
+                'message' => "Tidak bisa memanggil ulang. Nomor {$antrian->nomor} sudah {$statusText}."
+            ]);
         }
 
+        // Update status jadi called lagi (memanggil ulang)
         $antrian->update(['status' => 'called']);
 
+        // Update cache dengan timestamp baru untuk trigger display update
+        $calledAt = now()->toDateTimeString();
         Cache::put('current_queue', [
-            'id'      => $antrian->id,
-            'nomor'   => $antrian->nomor,
-            'nama'    => $antrian->nama,
-            'layanan' => $antrian->layanan,
-            'called_at' => now()->toDateTimeString(),
+            'id'        => $antrian->id,
+            'nomor'     => $antrian->nomor,
+            'nama'      => $antrian->nama,
+            'layanan'   => $antrian->layanan,
+            'called_at' => $calledAt,
+            'recall'    => true, // Flag untuk menandakan ini pemanggilan ulang
         ]);
 
         return response()->json([
             'success' => true,
             'nomor'   => $antrian->nomor,
             'nama'    => $antrian->nama,
+            'message' => "{$antrian->nomor} dipanggil ulang",
+        ]);
+    }
+
+    // ============================================
+    // LEWATI ANTRIAN (SKIP) - Panggil nomor berikutnya
+    // ============================================
+    public function skip($id)
+    {
+        // 1. Tandai antrian yang sedang dipanggil jadi 'missed'
+        Antrian::where('id', $id)->update(['status' => 'missed']);
+
+        // 2. Clear cache current queue
+        Cache::forget('current_queue');
+
+        // 3. Cari antrian waiting berikutnya
+        $nextQueue = Antrian::where('status', 'waiting')->orderBy('id', 'asc')->first();
+
+        if (!$nextQueue) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Tidak ada antrian berikutnya',
+                'skipped' => true,
+            ]);
+        }
+
+        // 4. Panggil antrian berikutnya
+        $nextQueue->update(['status' => 'called']);
+
+        Cache::put('current_queue', [
+            'id'      => $nextQueue->id,
+            'nomor'   => $nextQueue->nomor,
+            'nama'    => $nextQueue->nama,
+            'layanan' => $nextQueue->layanan,
+            'called_at' => now()->toDateTimeString(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'nomor'   => $nextQueue->nomor,
+            'nama'    => $nextQueue->nama,
+            'skipped' => true,
         ]);
     }
 

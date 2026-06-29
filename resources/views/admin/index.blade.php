@@ -103,12 +103,12 @@
                 </div>
                 <div class="card-body text-center py-5">
                     <div class="mb-3">
-                        <span class="status-dot bg-success"></span>
-                        <small class="text-muted ms-1">Sedang Dipanggil</small>
+                        <span class="status-dot bg-success" id="callIndicator"></span>
+                        <small class="text-muted ms-1" id="callStatus">Sedang Dipanggil</small>
                     </div>
                     <h1 class="display-1 fw-bold text-primary mb-2" id="nowNumber">-</h1>
                     <p class="text-muted mb-0" id="nowService">Tidak ada antrian aktif</p>
-                    <div class="mt-4">
+                    <div class="mt-4" id="actionButtons">
                         <button class="btn btn-success btn-lg me-2" id="btnPanggil" disabled>
                             <i class="bi bi-bell-fill me-2"></i>Panggil Nomor Berikutnya
                         </button>
@@ -116,8 +116,25 @@
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                     </div>
+                    {{-- Tombol Aksi untuk Antrian Aktif --}}
+                    <div class="mt-3" id="activeQueueActions" style="display: none;">
+                        <hr class="my-3">
+                        <p class="text-muted small mb-2">Aksi untuk antrian aktif:</p>
+                        <button class="btn btn-primary me-2" id="btnPanggilUlang" onclick="panggilUlangAktif()">
+                            <i class="bi bi-arrow-repeat me-2"></i>Panggil Ulang
+                        </button>
+                        <button class="btn btn-success me-2" id="btnSelesai" onclick="selesaiAktif()">
+                            <i class="bi bi-check-circle me-2"></i>Selesai
+                        </button>
+                        <button class="btn btn-warning" id="btnLewati" onclick="lewatiAktif()">
+                            <i class="bi bi-forward-fill me-2"></i>Lewati
+                        </button>
+                    </div>
                 </div>
             </div>
+
+            {{-- Toast Container --}}
+            <div id="toastContainer" class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999;"></div>
 
             {{-- Daftar Antrian --}}
             <div class="card card-queue">
@@ -164,6 +181,7 @@
 @push('scripts')
 <script>
     let allQueues = [];
+    let currentQueueId = null;
     let pollTimer = null;
 
     function pollData() {
@@ -180,7 +198,7 @@
 
     function initPolling() {
         pollData();
-        pollTimer = setInterval(pollData, 2000);
+        pollTimer = setInterval(pollData, 1000); // Poll setiap 1 detik untuk respons lebih cepat
     }
 
     function capitalize(str) {
@@ -196,15 +214,36 @@
 
     function updateCurrentCall(current, queues) {
         const waitingCount = queues.filter(q => q.status === 'waiting').length;
+        const activeActions = document.getElementById('activeQueueActions');
+        const callIndicator = document.getElementById('callIndicator');
+        const callStatus = document.getElementById('callStatus');
+
         if (current) {
             const layananLabels = { umum: 'Layanan Umum', prioritas: 'Layanan Prioritas', bisnis: 'Layanan Bisnis' };
             document.getElementById('nowNumber').textContent = current.nomor;
             document.getElementById('nowService').textContent = current.nama + ' - ' + (layananLabels[current.layanan] || current.layanan);
+            document.getElementById('btnPanggil').disabled = waitingCount === 0;
+
+            // Simpan ID antrian aktif
+            currentQueueId = current.id;
+
+            // Tampilkan tombol aksi untuk antrian aktif
+            activeActions.style.display = 'block';
+            callIndicator.className = 'status-dot bg-warning';
+            callStatus.textContent = 'Sedang Diproses';
         } else {
             document.getElementById('nowNumber').textContent = '-';
             document.getElementById('nowService').textContent = 'Tidak ada antrian aktif';
+            document.getElementById('btnPanggil').disabled = waitingCount === 0;
+
+            // Reset ID antrian aktif
+            currentQueueId = null;
+
+            // Sembunyikan tombol aksi
+            activeActions.style.display = 'none';
+            callIndicator.className = 'status-dot bg-success';
+            callStatus.textContent = 'Sedang Dipanggil';
         }
-        document.getElementById('btnPanggil').disabled = waitingCount === 0;
     }
 
     function renderQueueTable(queues) {
@@ -236,10 +275,14 @@
                 actions = `<button class="btn btn-sm btn-success me-1" onclick="panggil(${q.id})"><i class="bi bi-bell"></i> Panggil</button>
                    <button class="btn btn-sm btn-outline-secondary" onclick="selesai(${q.id})"><i class="bi bi-x-lg"></i></button>`;
             } else if (q.status === 'called') {
-                actions = `<button class="btn btn-sm btn-warning" onclick="selesai(${q.id})"><i class="bi bi-check-circle"></i> Selesai</button>`;
+                // Antrian yang sedang aktif - boleh Panggil Ulang, Selesai, Lewati
+                actions = `<button class="btn btn-sm btn-primary" onclick="panggilUlang(${q.id})"><i class="bi bi-arrow-repeat"></i> Ulang</button>
+                   <button class="btn btn-sm btn-success me-1" onclick="selesai(${q.id})"><i class="bi bi-check-circle"></i> Selesai</button>
+                   <button class="btn btn-sm btn-warning" onclick="lewati(${q.id})"><i class="bi bi-forward"></i> Lewati</button>`;
             } else if (q.status === 'missed') {
-                actions = `<button class="btn btn-sm btn-primary" onclick="panggilUlang(${q.id})"><i class="bi bi-arrow-repeat"></i> Panggil Ulang</button>
-                   <button class="btn btn-sm btn-outline-secondary" onclick="selesai(${q.id})"><i class="bi bi-x-lg"></i></button>`;
+                // Antrian yang sudah dilewati - TIDAK boleh dipanggil ulang
+                actions = `<span class="text-muted small me-2"><i class="bi bi-clock-history me-1"></i>Dilewati</span>
+                   <button class="btn btn-sm btn-outline-success" onclick="selesai(${q.id})"><i class="bi bi-check-lg"></i> Selesai</button>`;
             } else {
                 actions = `<span class="badge ${statusClass}"><i class="bi bi-check"></i> ${statusText}</span>`;
             }
@@ -261,12 +304,69 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': '{{ csrf_token() }}' },
             body: JSON.stringify({ id })
-        }).then(r => r.json()).catch(() => alert('Tidak dapat terhubung ke server'));
+        }).then(r => r.json()).then(d => {
+            if (d.success) {
+                showToast(d.message || 'Berhasil!', 'success');
+            } else {
+                showToast(d.message || 'Gagal!', 'danger');
+            }
+            return d;
+        }).catch(err => { showToast('Tidak dapat terhubung ke server', 'danger'); return { success: false }; });
     }
 
-    function panggil(id) { api("{{ url('/call') }}", id).then(d => { if (!d.success) alert('Gagal: ' + (d.message || '')); }); }
-    function panggilUlang(id) { api("{{ url('/recall') }}", id).then(d => { if (!d.success) alert('Gagal: ' + (d.message || '')); }); }
-    function selesai(id) { api("{{ url('/done') }}", id).then(d => { if (!d.success) alert('Gagal: ' + (d.message || '')); }); }
+    function showToast(message, type = 'info') {
+        const container = document.getElementById('toastContainer');
+        const id = 'toast-' + Date.now();
+        const bgClass = {
+            'success': 'bg-success',
+            'danger': 'bg-danger',
+            'warning': 'bg-warning text-dark',
+            'info': 'bg-info'
+        }[type] || 'bg-secondary';
+
+        container.innerHTML += `
+            <div id="${id}" class="toast show" role="alert">
+                <div class="toast-body ${bgClass} text-white">
+                    <i class="bi bi-${type === 'success' ? 'check-circle' : type === 'danger' ? 'exclamation-circle' : 'info-circle'} me-2"></i>
+                    ${message}
+                </div>
+            </div>
+        `;
+        setTimeout(() => {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }, 3000);
+    }
+
+    function panggil(id) { api("{{ url('/call') }}", id); }
+    function panggilUlang(id) { api("{{ url('/recall') }}", id); }
+    function selesai(id) { api("{{ url('/done') }}", id); }
+    function lewati(id) { api("{{ url('/skip') }}", id); }
+
+    // Aksi untuk antrian aktif (dari card utama)
+    function panggilUlangAktif() {
+        if (!currentQueueId) {
+            alert('Tidak ada antrian yang sedang aktif');
+            return;
+        }
+        panggilUlang(currentQueueId);
+    }
+
+    function selesaiAktif() {
+        if (!currentQueueId) {
+            alert('Tidak ada antrian yang sedang aktif');
+            return;
+        }
+        selesai(currentQueueId);
+    }
+
+    function lewatiAktif() {
+        if (!currentQueueId) {
+            alert('Tidak ada antrian yang sedang aktif');
+            return;
+        }
+        lewati(currentQueueId);
+    }
 
     document.getElementById('btnPanggil').addEventListener('click', function() {
         const w = allQueues.filter(q => q.status === 'waiting');
