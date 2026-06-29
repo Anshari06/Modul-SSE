@@ -136,65 +136,120 @@ class AntrianController extends Controller
     }
 
     // ============================================
-    // ENDPOINT SSE - STREAM DATA REALTIME
+    // PANGGIL ULANG NOMOR ANTRIAN (yang sudah missed/diproses)
+    // ============================================
+    public function recall($id)
+    {
+        // Tandai semua yang sedang 'called' jadi 'missed'
+        Antrian::where('status', 'called')->update(['status' => 'missed']);
+
+        $antrian = Antrian::find($id);
+
+        if (!$antrian) {
+            return response()->json(['success' => false, 'message' => 'Antrian tidak ditemukan']);
+        }
+
+        // Boleh panggil ulang yang missed atau done
+        if (!in_array($antrian->status, ['waiting', 'missed', 'done'])) {
+            return response()->json(['success' => false, 'message' => 'Tidak bisa memanggil ulang antrian yang sedang aktif']);
+        }
+
+        $antrian->update(['status' => 'called']);
+
+        Cache::put('current_queue', [
+            'id'      => $antrian->id,
+            'nomor'   => $antrian->nomor,
+            'nama'    => $antrian->nama,
+            'layanan' => $antrian->layanan,
+            'called_at' => now()->toDateTimeString(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'nomor'   => $antrian->nomor,
+            'nama'    => $antrian->nama,
+        ]);
+    }
+
+    // ============================================
+    // ENDPOINT SSE - STREAM DATA REALTIME (untuk Display Board)
     // ============================================
     public function stream()
     {
-        $response = Response::stream(function () {
-            $lastData = '';
+        // Disable semua buffering PHP
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+        ob_implicit_flush(1);
 
-            while (true) {
-                // Ambil data antrian hari ini
-                $queues = Antrian::today()
-                    ->orderBy('id', 'asc')
-                    ->get()
-                    ->toArray();
+        // Set SSE headers
+        header('Content-Type: text/event-stream; charset=utf-8');
+        header('Cache-Control: no-cache, no-store, must-revalidate');
+        header('Connection: keep-alive');
+        header('X-Accel-Buffering: no');
+        header('Access-Control-Allow-Origin: *');
 
-                $current = Cache::get('current_queue');
+        // Kirim data SEKETIKA connect
+        $this->_emitQueueData();
+        echo ": connect\n\n";
+        ob_flush();
+        flush();
 
-                $data = json_encode([
-                    'queues'   => $queues,
-                    'current'  => $current,
-                    'stats'    => [
-                        'waiting' => Antrian::today()->where('status', 'waiting')->count(),
-                        'called'  => Antrian::today()->where('status', 'called')->count(),
-                        'done'    => Antrian::today()->where('status', 'done')->count(),
-                        'missed'  => Antrian::today()->where('status', 'missed')->count(),
-                    ],
-                    'timestamp' => now()->toDateTimeString(),
-                ]);
+        while (true) {
+            $this->_emitQueueData();
+            echo ": keep-alive " . time() . "\n\n";
+            ob_flush();
+            flush();
 
-                // Hanya kirim kalau ada perubahan data
-                if ($data !== $lastData) {
-                    echo "data: {$data}\n\n";
-                    $lastData = $data;
-                }
-
-                // Keep-alive comment setiap 15 detik
-                echo ": keep-alive " . time() . "\n\n";
-
-                ob_flush();
-                flush();
-
-                // Cek koneksi client (jika断开则退出)
-                if (connection_aborted()) {
-                    break;
-                }
-
-                sleep(1);
+            if (connection_aborted()) {
+                break;
             }
-        }, 200, [
-            'Content-Type'  => 'text/event-stream',
-            'Cache-Control' => 'no-cache, no-store, must-revalidate',
-            'Connection'    => 'keep-alive',
-            'X-Accel-Buffering' => 'no',
+
+            usleep(1000000); // 1 detik
+        }
+
+        exit;
+    }
+
+    // ============================================
+    // ENDPOINT AJAX POLLING (untuk Guest & Admin - SUPER FAST)
+    // ============================================
+    public function poll()
+    {
+        $queues = Antrian::today()->orderBy('id', 'asc')->get()->toArray();
+        $current = Cache::get('current_queue');
+
+        return response()->json([
+            'queues'   => $queues,
+            'current'  => $current,
+            'stats'    => [
+                'waiting' => Antrian::today()->where('status', 'waiting')->count(),
+                'called'  => Antrian::today()->where('status', 'called')->count(),
+                'done'    => Antrian::today()->where('status', 'done')->count(),
+                'missed'  => Antrian::today()->where('status', 'missed')->count(),
+            ],
+            'timestamp' => now()->toDateTimeString(),
+        ]);
+    }
+
+    // Helper: emit queue data (untuk SSE)
+    private function _emitQueueData()
+    {
+        $queues = Antrian::today()->orderBy('id', 'asc')->get()->toArray();
+        $current = Cache::get('current_queue');
+
+        $data = json_encode([
+            'queues'   => $queues,
+            'current'  => $current,
+            'stats'    => [
+                'waiting' => Antrian::today()->where('status', 'waiting')->count(),
+                'called'  => Antrian::today()->where('status', 'called')->count(),
+                'done'    => Antrian::today()->where('status', 'done')->count(),
+                'missed'  => Antrian::today()->where('status', 'missed')->count(),
+            ],
+            'timestamp' => now()->toDateTimeString(),
         ]);
 
-        $response->headers->set('Content-Type', 'text/event-stream');
-        $response->headers->set('Cache-Control', 'no-cache, no-store, must-revalidate');
-        $response->headers->set('Connection', 'keep-alive');
-        $response->headers->set('X-Accel-Buffering', 'no');
-
-        return $response;
+        echo "data: {$data}\n\n";
     }
 }

@@ -753,25 +753,38 @@
         // INIT SSE
         // =====================================================
         function initSSE() {
-            eventSource = new EventSource("{{ route('antrian.stream') }}");
+            const esUrl = "{{ route('antrian.stream') }}";
+            eventSource = new EventSource(esUrl);
+
+            eventSource.onopen = function() {
+                console.log('SSE Connected');
+            };
 
             eventSource.onmessage = function(e) {
-                const data = JSON.parse(e.data);
-                const queues = data.queues || [];
+                try {
+                    const data = JSON.parse(e.data);
+                    const queues = data.queues || [];
 
-                // Cegah re-render kalau data sama
-                const queueCount = queues.length;
-                if (queueCount !== lastQueueCount) {
-                    lastQueueCount = queueCount;
+                    // Selalu update next queues
                     updateNextQueues(queues);
-                }
 
-                if (data.stats) updateStats(data.stats);
-                if (data.current) updateCallout(data.current);
+                    // Selalu update stats
+                    if (data.stats) updateStats(data.stats);
+
+                    // Selalu update callout
+                    updateCallout(data.current || null);
+                } catch (err) {
+                    console.error('SSE parse error:', err);
+                }
             };
 
             eventSource.onerror = function() {
-                console.log('SSE error, retrying...');
+                console.log('SSE disconnected, retrying in 3s...');
+                // Auto reconnect setelah 3 detik
+                setTimeout(function() {
+                    if (eventSource) eventSource.close();
+                    initSSE();
+                }, 3000);
             };
         }
 
@@ -779,5 +792,26 @@
         // START
         // =====================================================
         initSSE();
+
+        // Fallback: polling AJAX jika SSE tidak connect dalam 5 detik
+        setTimeout(function() {
+            if (document.getElementById('displayNumber').textContent === '-' ||
+                document.getElementById('displayNumber').textContent === 'Memuat...') {
+                console.log('SSE timeout, using AJAX fallback...');
+                fetch('/sse/antrian')
+                    .then(r => r.text())
+                    .then(t => {
+                        // Extract first data: line
+                        const match = t.match(/^data: (.+)$/m);
+                        if (match) {
+                            const data = JSON.parse(match[1]);
+                            if (data.queues) updateNextQueues(data.queues);
+                            if (data.stats) updateStats(data.stats);
+                            if (data.current) updateCallout(data.current);
+                        }
+                    })
+                    .catch(e => console.log('AJAX fallback failed:', e));
+            }
+        }, 5000);
     </script>
 @endpush

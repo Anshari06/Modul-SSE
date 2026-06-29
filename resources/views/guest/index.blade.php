@@ -120,67 +120,74 @@
 
 @push('scripts')
 <script>
-    let eventSource;
+    // =====================================================
+    // POLLING - lebih cepat & reliable dari SSE
+    // Update setiap 2 detik
+    // =====================================================
+    let pollTimer = null;
 
-    function initSSE() {
-        eventSource = new EventSource("{{ route('antrian.stream') }}");
+    function updateGuestUI(data) {
+        // Update antrian sekarang (yang sedang dipanggil)
+        if (data.current) {
+            document.getElementById('currentNumber').textContent = data.current.nomor ?? '-';
+            const layananLabels = { umum: 'Layanan Umum', prioritas: 'Layanan Prioritas', bisnis: 'Layanan Bisnis' };
+            document.getElementById('currentService').textContent = data.current.nama
+                ? `${data.current.nama} - ${layananLabels[data.current.layanan] || data.current.layanan}`
+                : 'Tidak ada antrian aktif';
+        }
 
-        // Event tunggal unified: dapat queues, current, stats
-        eventSource.onmessage = function(e) {
-            const data = JSON.parse(e.data);
+        // Update statistik
+        if (data.stats) {
+            const el = document.querySelector('.stat-menunggu-num');
+            if (el) el.textContent = data.stats.waiting;
+            const el2 = document.querySelector('.stat-diproses-num');
+            if (el2) el2.textContent = data.stats.called;
+            const el3 = document.querySelector('.stat-selesai-num');
+            if (el3) el3.textContent = data.stats.done;
+        }
 
-            // Update antrian sekarang (yang sedang dipanggil)
-            if (data.current) {
-                document.getElementById('currentNumber').textContent = data.current.nomor ?? '-';
-                const layananLabels = { umum: 'Layanan Umum', prioritas: 'Layanan Prioritas', bisnis: 'Layanan Bisnis' };
-                document.getElementById('currentService').textContent = data.current.nama
-                    ? `${data.current.nama} - ${layananLabels[data.current.layanan] || data.current.layanan}`
-                    : 'Tidak ada antrian aktif';
-            }
+        // Update tabel antrian
+        const tbody = document.getElementById('myQueueTable');
+        const queues = data.queues || [];
 
-            // Update statistik
-            if (data.stats) {
-                const el = document.querySelector('.stat-menunggu-num');
-                if (el) el.textContent = data.stats.waiting;
-                const el2 = document.querySelector('.stat-diproses-num');
-                if (el2) el2.textContent = data.stats.called;
-                const el3 = document.querySelector('.stat-selesai-num');
-                if (el3) el3.textContent = data.stats.done;
-            }
+        if (queues.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Belum ada data antrian</td></tr>';
+            return;
+        }
 
-            // Update tabel antrian saya (tampilkan semua status)
-            const tbody = document.getElementById('myQueueTable');
-            const queues = data.queues || [];
+        tbody.innerHTML = queues.map(q => {
+            const statusMap = {
+                'waiting': ['bg-secondary', 'Menunggu'],
+                'called':  ['bg-warning text-dark', 'Dipanggil'],
+                'missed':  ['bg-danger', 'Terlewat'],
+                'done':    ['bg-success', 'Selesai'],
+            };
+            const [statusClass, statusText] = statusMap[q.status] || ['bg-secondary', 'Unknown'];
+            const layananText = { umum: 'Umum', prioritas: 'Prioritas', bisnis: 'Bisnis' }[q.layanan] || q.layanan;
+            const waktu = new Date(q.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
-            if (queues.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Belum ada data antrian</td></tr>';
-                return;
-            }
+            return `<tr>
+                <td><span class="badge bg-primary queue-badge">${q.nomor}</span></td>
+                <td>${q.nama}</td>
+                <td><span class="badge bg-info">${layananText}</span></td>
+                <td><span class="badge ${statusClass}">${statusText}</span></td>
+                <td>${waktu}</td>
+            </tr>`;
+        }).join('');
+    }
 
-            tbody.innerHTML = queues.map(q => {
-                const statusMap = {
-                    'waiting': ['bg-secondary', 'Menunggu'],
-                    'called':  ['bg-warning text-dark', 'Dipanggil'],
-                    'missed':  ['bg-danger', 'Terlewat'],
-                    'done':    ['bg-success', 'Selesai'],
-                };
-                const [statusClass, statusText] = statusMap[q.status] || ['bg-secondary', 'Unknown'];
-                const layananText = { umum: 'Umum', prioritas: 'Prioritas', bisnis: 'Bisnis' }[q.layanan] || q.layanan;
-                const waktu = new Date(q.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    function pollData() {
+        fetch("{{ route('antrian.poll') }}")
+            .then(r => r.json())
+            .then(data => updateGuestUI(data))
+            .catch(err => console.error('Poll error:', err));
+    }
 
-                return `<tr>
-                    <td><span class="badge bg-primary queue-badge">${q.nomor}</span></td>
-                    <td>${q.nama}</td>
-                    <td><span class="badge bg-info">${layananText}</span></td>
-                    <td><span class="badge ${statusClass}">${statusText}</span></td>
-                    <td>${waktu}</td>
-                </tr>`;
-            }).join('');
-        };
-
-        eventSource.onerror = function() {
-            console.log('SSE Connection error, retrying...');
-        };
+    function startPolling() {
+        // Ambil data SEKETIKA page load
+        pollData();
+        // Update setiap 2 detik
+        pollTimer = setInterval(pollData, 2000);
     }
 
     document.getElementById('formAmbilAntrian').addEventListener('submit', function(e) {
@@ -208,6 +215,8 @@
                 notifText.textContent = `Berhasil! Nomor antrian Anda adalah ${data.nomor}`;
                 notif.style.display = 'block';
                 this.reset();
+                // Trigger poll SEKETIKA setelah ambil nomor
+                pollData();
             } else {
                 notif.className = 'alert alert-danger mt-4 text-center';
                 notifText.textContent = data.message || 'Terjadi kesalahan';
@@ -216,7 +225,7 @@
 
             setTimeout(() => { notif.style.display = 'none'; }, 5000);
         })
-        .catch(err => {
+        .catch(() => {
             const notif = document.getElementById('notification');
             notif.className = 'alert alert-danger mt-4 text-center';
             notif.querySelector('span').textContent = 'Gagal mengambil nomor antrian';
@@ -224,6 +233,6 @@
         });
     });
 
-    initSSE();
+    startPolling();
 </script>
 @endpush

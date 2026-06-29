@@ -163,47 +163,48 @@
 
 @push('scripts')
 <script>
-    let eventSource;
     let allQueues = [];
+    let pollTimer = null;
 
-    function initSSE() {
-        eventSource = new EventSource("{{ route('antrian.stream') }}");
+    function pollData() {
+        fetch("{{ route('antrian.poll') }}")
+            .then(r => r.json())
+            .then(data => {
+                allQueues = data.queues || [];
+                renderQueueTable(allQueues);
+                updateStats(data.stats || {});
+                updateCurrentCall(data.current || null, allQueues);
+            })
+            .catch(err => console.error('Poll error:', err));
+    }
 
-        // Unified SSE event
-        eventSource.onmessage = function(e) {
-            const data = JSON.parse(e.data);
-            allQueues = data.queues || [];
-
-            renderQueueTable(allQueues);
-
-            if (data.stats) {
-                document.getElementById('statMenunggu').textContent = data.stats.waiting;
-                document.getElementById('statDiproses').textContent = data.stats.called;
-                document.getElementById('statSelesai').textContent = data.stats.done;
-                document.getElementById('statTotal').textContent = allQueues.length;
-            }
-
-            if (data.current) {
-                document.getElementById('nowNumber').textContent = data.current.nomor ?? '-';
-                const layananLabels = { umum: 'Layanan Umum', prioritas: 'Layanan Prioritas', bisnis: 'Layanan Bisnis' };
-                document.getElementById('nowService').textContent = data.current.nama
-                    ? `${data.current.nama} - ${layananLabels[data.current.layanan] || data.current.layanan}`
-                    : 'Tidak ada antrian aktif';
-                document.getElementById('btnPanggil').disabled = false;
-            } else {
-                document.getElementById('nowNumber').textContent = '-';
-                document.getElementById('nowService').textContent = 'Tidak ada antrian aktif';
-                document.getElementById('btnPanggil').disabled = allQueues.filter(q => q.status === 'waiting').length === 0;
-            }
-        };
-
-        eventSource.onerror = function() {
-            console.log('SSE Connection error, retrying...');
-        };
+    function initPolling() {
+        pollData();
+        pollTimer = setInterval(pollData, 2000);
     }
 
     function capitalize(str) {
         return str ? str.charAt(0).toUpperCase() + str.slice(1) : '';
+    }
+
+    function updateStats(stats) {
+        document.getElementById('statMenunggu').textContent = stats.waiting || 0;
+        document.getElementById('statDiproses').textContent = stats.called || 0;
+        document.getElementById('statSelesai').textContent = stats.done || 0;
+        document.getElementById('statTotal').textContent = allQueues.length;
+    }
+
+    function updateCurrentCall(current, queues) {
+        const waitingCount = queues.filter(q => q.status === 'waiting').length;
+        if (current) {
+            const layananLabels = { umum: 'Layanan Umum', prioritas: 'Layanan Prioritas', bisnis: 'Layanan Bisnis' };
+            document.getElementById('nowNumber').textContent = current.nomor;
+            document.getElementById('nowService').textContent = current.nama + ' - ' + (layananLabels[current.layanan] || current.layanan);
+        } else {
+            document.getElementById('nowNumber').textContent = '-';
+            document.getElementById('nowService').textContent = 'Tidak ada antrian aktif';
+        }
+        document.getElementById('btnPanggil').disabled = waitingCount === 0;
     }
 
     function renderQueueTable(queues) {
@@ -224,19 +225,24 @@
                 'done':    ['bg-success', 'Selesai'],
             };
             const [statusClass, statusText] = statusMap[q.status] || ['bg-secondary', 'Unknown'];
-            const layananClass = q.layanan === 'umum' ? 'bg-primary' :
-                                 q.layanan === 'prioritas' ? 'bg-danger' : 'bg-info';
+            const layananClass = { umum: 'bg-primary', prioritas: 'bg-danger', bisnis: 'bg-info' }[q.layanan] || 'bg-secondary';
             const layananText = capitalize(q.layanan);
             const waktu = new Date(q.created_at).toLocaleString('id-ID', {
                 day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
             });
 
-            const btnPanggil = q.status === 'waiting'
-                ? `<button class="btn btn-sm btn-success" onclick="panggil(${q.id})"><i class="bi bi-bell"></i> Panggil</button>
-                   <button class="btn btn-sm btn-outline-danger" onclick="selesai(${q.id})"><i class="bi bi-check-lg"></i></button>`
-                : q.status === 'called'
-                ? `<button class="btn btn-sm btn-warning" onclick="selesai(${q.id})"><i class="bi bi-check-lg"></i> Selesai</button>`
-                : `<span class="badge ${statusClass}"><i class="bi bi-check"></i> ${statusText}</span>`;
+            let actions = '';
+            if (q.status === 'waiting') {
+                actions = `<button class="btn btn-sm btn-success me-1" onclick="panggil(${q.id})"><i class="bi bi-bell"></i> Panggil</button>
+                   <button class="btn btn-sm btn-outline-secondary" onclick="selesai(${q.id})"><i class="bi bi-x-lg"></i></button>`;
+            } else if (q.status === 'called') {
+                actions = `<button class="btn btn-sm btn-warning" onclick="selesai(${q.id})"><i class="bi bi-check-circle"></i> Selesai</button>`;
+            } else if (q.status === 'missed') {
+                actions = `<button class="btn btn-sm btn-primary" onclick="panggilUlang(${q.id})"><i class="bi bi-arrow-repeat"></i> Panggil Ulang</button>
+                   <button class="btn btn-sm btn-outline-secondary" onclick="selesai(${q.id})"><i class="bi bi-x-lg"></i></button>`;
+            } else {
+                actions = `<span class="badge ${statusClass}"><i class="bi bi-check"></i> ${statusText}</span>`;
+            }
 
             return `<tr>
                 <td class="text-center"><span class="badge bg-dark queue-badge">${q.nomor}</span></td>
@@ -245,61 +251,38 @@
                 <td><span class="badge ${layananClass}">${layananText}</span></td>
                 <td><span class="badge ${statusClass}">${statusText}</span></td>
                 <td>${waktu}</td>
-                <td class="text-center">${btnPanggil}</td>
+                <td class="text-center">${actions}</td>
             </tr>`;
         }).join('');
     }
 
-    function panggil(id) {
-        fetch("{{ url('/call') }}/" + id, {
+    function api(url, id) {
+        return fetch(url + '/' + id, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': '{{ csrf_token() }}'
-            },
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': '{{ csrf_token() }}' },
             body: JSON.stringify({ id })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (!data.success) alert('Gagal memanggil: ' + (data.message || 'Terjadi kesalahan'));
-        });
+        }).then(r => r.json()).catch(() => alert('Tidak dapat terhubung ke server'));
     }
 
-    function selesai(id) {
-        fetch("{{ url('/done') }}/" + id, {
-            method: 'POST',
-            headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}' }
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (!data.success) alert('Gagal menyelesaikan: ' + (data.message || 'Terjadi kesalahan'));
-        });
-    }
+    function panggil(id) { api("{{ url('/call') }}", id).then(d => { if (!d.success) alert('Gagal: ' + (d.message || '')); }); }
+    function panggilUlang(id) { api("{{ url('/recall') }}", id).then(d => { if (!d.success) alert('Gagal: ' + (d.message || '')); }); }
+    function selesai(id) { api("{{ url('/done') }}", id).then(d => { if (!d.success) alert('Gagal: ' + (d.message || '')); }); }
 
     document.getElementById('btnPanggil').addEventListener('click', function() {
-        const waitingQueues = allQueues.filter(q => q.status === 'waiting');
-        if (waitingQueues.length > 0) {
-            panggil(waitingQueues[0].id);
-        }
+        const w = allQueues.filter(q => q.status === 'waiting');
+        if (w.length === 0) { alert('Tidak ada antrian yang menunggu!'); return; }
+        panggil(w[0].id);
     });
 
     document.getElementById('btnReset').addEventListener('click', function() {
         if (confirm('Yakin ingin mereset semua antrian hari ini?')) {
-            fetch("{{ route('antrian.reset') }}", {
-                method: 'POST',
-                headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}' }
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.success) alert('Antrian berhasil direset');
-            });
+            fetch("{{ route('antrian.reset') }}", { method: 'POST', headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}' }})
+                .then(r => r.json()).then(d => { if (d.success) alert('Antrian berhasil direset!'); });
         }
     });
 
-    document.getElementById('filterLayanan').addEventListener('change', function() {
-        renderQueueTable(allQueues);
-    });
+    document.getElementById('filterLayanan').addEventListener('change', function() { renderQueueTable(allQueues); });
 
-    initSSE();
+    initPolling();
 </script>
 @endpush
